@@ -123,7 +123,7 @@ window.msRequestAnimationFrame;
 
 const typedTextSpan = document.querySelector(".typed-text");
 const cursorSpan = document.querySelector(".cursor");
-const textArray = ["Автор ", "Українець ", "Поет-романтик ", "недoПрограміст ", "Music lover<3", "Композитор-початківець"];
+const textArray = ["Вадим ", "Українець ", "Поет-романтик ", "недoПрограміст ", "Music lover<3", "Композитор-початківець", "AuthorChe", "Vadym_Yem"];
 const typingDelay = 250;
 const erasingDelay = 100;
 const newTextDelay = 2500; 
