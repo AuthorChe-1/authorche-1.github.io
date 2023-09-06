@@ -24,8 +24,7 @@ body {
 
 
 
-.seller {
-    font-size: 20px;
+.seller { 
     font-family: monospace;
 
     color: #444;
@@ -89,6 +88,7 @@ body {
 
 
 .header {
+    font-size: 25px;
 
     text-align: center;
 
