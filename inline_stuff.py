@@ -129,7 +129,7 @@ class InlineStuff(loader.Module):
 
         if message.text == "/start":
             await message.answer_photo(
-                "https://raw.githubusercontent.com/authorche-1/assets/refs/heads/main/authorche-1.github.io/start.jpg",
+                "https://raw.githubusercontent.com/AuthorChe-1/authorche-1.github.io/refs/heads/main/start.jpg",
                 caption=self.strings("this_is_heroku"),
             )
 
@@ -139,7 +139,7 @@ class InlineStuff(loader.Module):
                 await message.answer("❌ You are not allowed to use this")
             else:
                 await message.answer_photo(
-                    "https://raw.githubusercontent.com/authorche-1/assets/refs/heads/main/authorche-1.github.io/start.jpg",
+                    "https://raw.githubusercontent.com/AuthorChe-1/authorche-1.github.io/refs/heads/main/start.jpg",
                     caption = self.strings["profile_cmd"].format(prefix=self.get_prefix(),ram_usage=utils.get_ram_usage(),cpu_usage=utils.get_cpu_usage(),host=utils.get_named_platform()), 
                     reply_markup = self.inline.generate_markup(
                         markup_obj=[
