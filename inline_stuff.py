@@ -128,9 +128,9 @@ class InlineStuff(loader.Module):
             return
 
         if message.text == "/start":
-            # Вариант 1: Убрать фото и оставить только текст
-            await message.answer(
-                text=self.strings("this_is_heroku"),
+            await message.answer_photo(
+                "https://raw.githubusercontent.com/AuthorChe-1/authorche-1.github.io/refs/heads/main/start.jpg",
+                caption=self.strings("this_is_heroku"),
             )
 
         if message.text == "/profile":
@@ -138,19 +138,14 @@ class InlineStuff(loader.Module):
             if message.from_user.id != self.client.tg_id:
                 await message.answer("❌ You are not allowed to use this")
             else:
-                # Вариант 1: Убрать фото и оставить только текст
-                await message.answer(
-                    text=self.strings["profile_cmd"].format(
-                        prefix=self.get_prefix(),
-                        ram_usage=utils.get_ram_usage(),
-                        cpu_usage=utils.get_cpu_usage(),
-                        host=utils.get_named_platform()
-                    ), 
-                    reply_markup=self.inline.generate_markup(
+                await message.answer_photo(
+                    "https://raw.githubusercontent.com/AuthorChe-1/authorche-1.github.io/refs/heads/main/start.jpg",
+                    caption = self.strings["profile_cmd"].format(prefix=self.get_prefix(),ram_usage=utils.get_ram_usage(),cpu_usage=utils.get_cpu_usage(),host=utils.get_named_platform()), 
+                    reply_markup = self.inline.generate_markup(
                         markup_obj=[
                             [
                                 {
-                                    "text": "✍️ Restart", 
+                                    "text": "🚀 Restart", 
                                     "callback": self.restart, 
                                     "args": (message,)
                                 }
