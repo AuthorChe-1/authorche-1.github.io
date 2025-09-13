@@ -130,7 +130,7 @@ class InlineStuff(loader.Module):
         if message.text == "/start":
             # Вариант 1: Убрать фото и оставить только текст
             await message.answer(
-                caption=self.strings("this_is_heroku"),
+                text=self.strings("this_is_heroku"),
             )
 
         if message.text == "/profile":
@@ -150,7 +150,7 @@ class InlineStuff(loader.Module):
                         markup_obj=[
                             [
                                 {
-                                    "text": "🚀 Restart", 
+                                    "text": "✍️ Restart", 
                                     "callback": self.restart, 
                                     "args": (message,)
                                 }
@@ -172,4 +172,4 @@ class InlineStuff(loader.Module):
 
     async def reset_prefix(self, call: InlineCall, message):
         await message.answer(self.strings["prefix_reset"])
-        self.db.set("heroku.main", "command_prefix", ".") 
+        self.db.set("heroku.main", "command_prefix", ".")
