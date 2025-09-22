@@ -263,7 +263,7 @@ class InfoMod(loader.Module):
 
     @loader.inline_everyone
     async def info_inline_handler(self, query: InlineQuery) -> dict:
-        """Обробляє інлайн-запити для sysinfo та info"""
+        """Переглянути інформацію про систему та пітримку проєкту."""
         info_result = {
             "title": self.strings("send_donate_info"),
             "description": self.strings("donate_description"),
