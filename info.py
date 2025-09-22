@@ -1,175 +1,172 @@
-# ©️ Dan Gazizullin, 2021-2023
-# This file is a part of Hikka Userbot
-# 🌐 https://github.com/hikariatama/Hikka
-# You can redistribute it and/or modify it under the terms of the GNU AGPLv3
-# 🔑 https://www.gnu.org/licenses/agpl-3.0.html
-
-# ©️ AuthorChe, 2025
-# You can redistribute it and/or modify it under the terms of the GNU AGPLv3
-# 🔑 https://www.gnu.org/licenses/agpl-3.0.html
-
-import git
 import time
 import psutil
-import os
-import glob
-import requests
-import re
-import emoji
-import datetime
-import logging
-
-from bs4 import BeautifulSoup
-from typing import Optional
-from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
-from io import BytesIO
-from herokutl.tl.types import Message
-from herokutl.utils import get_display_name
-from .. import loader, utils, version
-from ..inline.types import InlineQuery
 import platform as lib_platform
 import getpass
+import telethon
+import socket
+import logging
+import abc
+
+from aiogram.types import Message as AiogramMessage, InlineKeyboardMarkup, InlineKeyboardButton
+from hikkatl.tl.types import Message
+from hikkatl.utils import get_display_name
+from .. import loader, utils
+from ..inline.types import InlineQuery
 
 logger = logging.getLogger(__name__)
 
+# --- Helper functions ---
+def bytes2human(n):
+    symbols = ('B','K','M','G','T','P')
+    prefix = {s:1<<(i*10) for i,s in enumerate(symbols[1:],1)}
+    for s in reversed(symbols[1:]):
+        if n >= prefix[s]:
+            return f"{n/prefix[s]:.2f}{s}"
+    return f"{n}B"
+
+def format_uptime(sec):
+    m, s = divmod(sec, 60)
+    h, m = divmod(m, 60)
+    d, h = divmod(h, 24)
+    return f"{int(d)}d {int(h)}h {int(m)}m"
+
+def get_distro_info():
+    name = ver = "N/A"
+    try:
+        with open("/etc/os-release") as f:
+            data = dict(line.strip().split("=", 1) for line in f if "=" in line)
+        name = data.get("PRETTY_NAME", data.get("NAME", "Unknown")).strip('"')
+        ver = data.get("VERSION_ID", "").strip('"')
+    except: pass
+    return name, ver
+
+def get_cpu_model():
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if "model name" in line:
+                    return line.split(":",1)[1].strip()
+    except: pass
+    return lib_platform.processor() or "Unknown"
+
 @loader.tds
 class InfoMod(loader.Module):
-    """Show userbot info with enhanced functionality"""
+    """Універсальний інформаційний модуль з розширеним функціоналом"""
 
     strings = {
-        "name": "Info",
-        "owner": "Owner",
-        "version": "Version",
-        "build": "Build", 
-        "branch": "Branch",
-        "prefix": "Prefix",
-        "uptime": "Uptime",
-        "cpu_usage": "CPU Usage",
-        "ram_usage": "RAM Usage",
-        "send_info": "Send bot info",
-        "description": "ℹ This will not compromise any sensitive info",
-        "up-to-date": "😌 Up-to-date",
-        "update_required": "😕 Update required </b><code>{prefix}update</code><b>",
-        "non_detectable": "Non-detectable",
-        "incorrect_format_font": "❌ Incorrect font format. Use .ttf or .otf",
-        "no_font": "❌ No font provided",
-        "font_installed": "✅ Font installed successfully",
-        "incorrect_img_format": "❌ Incorrect image format",
-        "setinfo_no_args": "❌ No arguments provided",
-        "setinfo_success": "✅ Custom message set successfully",
-        "desc": "Heroku userbot info module",
-        "ping_emoji": "Ping emoji",
-        "_cfg_cst_msg": "Custom message for info. May contain {me}, {version}, {build}, {prefix}, {platform}, {upd}, {uptime}, {cpu_usage}, {ram_usage}, {ping}, {time} keywords",
-        "_cfg_banner": "Banner URL for info message",
-        "_cfg_cst_btn": "Custom button. Leave empty to remove button",
-        "_cfg_close": "Close button text",
-        "_cfg_time": "Timezone offset (e.g., +3, -5)",
-        "_cfg_cst_bnr": "Custom banner URL",
-        "_cfg_cst_frmt": "Custom file format for banner",
-        "_cfg_inline_banner": "Set True to disable inline media banner"
+        "name": "Інфо",
+        # --- Strings for sysinfo command ---
+        "send_sysinfo": "Надіслати системну інформацію",
+        "sysinfo_description": "ℹ Детальна інформація про сервер",
+        # --- Strings for info (donate) command ---
+        "send_donate_info": "Надіслати інформацію для донату",
+        "donate_description": "❤️ Підтримати автора фінансово",
+        "donate_text": """<b>Підтримайте мою творчість</b>
+<i>Кожен внесок розпалює нові ідеї і дозволяє створювати більше віршів та музики.</i>
+<b>💳 Банківські картки</b>
+🍏ABank24
+<code>4323 3473 9773 4135</code>
+💵Privat24
+<code>5168 7451 5064 0644</code>
+<b>Криптовалюта</b>
+🪙BTC
+<code>123MgBkkpu6XwrU53SvrBxiW9useRSt6qR</code>
+💎TON
+<code>UQDicYt03peG8l0CBCKW2YQJ914YoKkzObWFbbIIdUlqnpNJ</code>
+💸USDT (TON)
+<code>UQBqKU8fvbZVZJvyAw85wQP88O0sTzFkBxW1lfbht9hGayBK</code>
+💸USDT (TRX)
+<code>TXkiayvYBwyuX7r9dj5NvEfdF5FCJbu5kb</code>
+Дякую за вашу підтримку 🚀""",
+        "close_button": "🔻 Закрити",
+        "website_button": "Підтримати на сайті",
+        "cryptobot_button": "CryptoBot",
+        "xrocket_button": "xRocket",
+        # --- Strings for bot commands ---
+        "/donate": (
+            "<b>Підтримати проєкт — це чудова ідея! ❤️</b>\n\n"
+            "<i>Ви можете зробити переказ на мої картки (UA):</i>\n"
+            "🍏 <b>ABank24:</b> <code>4323347397734135</code>\n"
+            "💸 <b>Privat24:</b> <code>5168745150640644</code>\n\n"
+            "<i>Або на мої криптовалютні гаманці:</i>\n"
+            "🪙 <b>BTC:</b>\n<code>123MgBkkpu6XwrU53SvrBxiW9useRSt6qR</code>\n"
+            "💎 <b>TON:</b>\n<code>UQDicYt03peG8l0CBCKW2YQJ914YoKkzObWFbbIIdUlqnpNJ</code>\n"
+            "💲 <b>USDT (TON):</b>\n<code>UQBqKU8fvbZVZJvyAw85wQP88O0sTzFkBxW1lfbht9hGayBK</code>\n"
+            "💲 <b>USDT (TRC-20):</b>\n<code>TXkiayvYBwyuX7r9dj5NvEfdF5FCJbu5kb</code>\n\n"
+            "🚀 <b>Швидкий донат через xRocket:</b> /xrocket\n\n"
+            "<i>Для вас це дрібниця, а для мене — величезна підтримка та мотивація! Дякую!</i> 😊"
+        ),
+        "/author": (
+            "😎 <b>Автор бота:</b> @Author_Che.\n\n"
+            "Цей бот є <i>повністю безкоштовним та не містить реклами</i>. "
+            "Його мета — зробити використання Telegram простішим та зручнішим.\n\n"
+            "Інші мої проєкти можна знайти тут: @wsinfo.\n\n"
+            "<b>Буду вдячний за підтримку проєкту:</b> /donate"
+        ),
+        "/bots": (
+            "<b>🤖 Мої безкоштовні боти:</b>\n\n"
+            "💬 @vyfb_bot — надійний помічник для зворотного зв'язку.\n"
+            "🛠️ @UniVersalAuthorBot — багатофункціональний бот (веб-версія: authorche.pp.ua/tools).\n"
+            "🎲 @ac_moder_bot — модератор для груп із казино.\n"
+            "📱 @ADBCheHelperBot — помічник для роботи з командами ADB.\n"
+            "✅ @pollplot_bot — списки завдань та опитування.\n"
+            "☁️ @authorcloud_bot — безкоштовне хмарне сховище в Telegram.\n\n"
+            "<i>🥺 На жаль, через відсутність стабільного хостингу не всі боти працюють стабільно. "
+            "Ваш донат допоможе відновити їхню роботу.</i>\n\n"
+            "<b>Підтримати проєкти:</b> /donate"
+        ),
+        "/main": (
+            "😅 <b>Не можу розпізнати команду.</b>\n\n"
+            "Будь ласка, скористайтесь головним меню, щоб побачити доступні функції: /menu"
+        ),
+        "/menu": (
+            "👋 <b>Привіт! Це головне меню.</b>\n\n"
+            "Ось список доступних команд:\n\n"
+            "😎 /author — дізнатися про автора бота.\n"
+            "🤖 /bots — переглянути інші проєкти автора.\n"
+            "❤️ /donate — підтримати розробку фінансово.\n"
+            "📝 /menu — показати це меню ще раз."
+        ),
+        "start_heroku_init": "🚀 <b>Бот успішно перезапущено!</b>",
     }
 
     def __init__(self):
         self.config = loader.ModuleConfig(
             loader.ConfigValue(
-                "custom_message",
-                "",
-                doc=lambda: self.strings("_cfg_cst_msg"),
-            ),
-            loader.ConfigValue(
-                "banner_url",
-                "https://raw.githubusercontent.com/AuthorChe-1/authorche-1.github.io/refs/heads/main/start.jpg",
-                lambda: self.strings("_cfg_banner"),
-            ),
-            loader.ConfigValue(
-                "show_heroku",
-                True,
-                validator=loader.validators.Boolean(),
-            ),
-            loader.ConfigValue(
-                "ping_emoji",
-                "✍️",
-                lambda: self.strings["ping_emoji"],
+                "donate_text",
+                self.strings["donate_text"],
+                "Текст, що відображається в команді .info",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
-                "switchInfo",
-                False,
-                "Switch info to mode photo",
-                validator=loader.validators.Boolean(),
+                "donate_banner_url",
+                "https://authorche.top/poems/logo.jpg",
+                "URL банера для команди .info",
+                validator=loader.validators.Link(),
             ),
             loader.ConfigValue(
-                "imgSettings",
-                ["imgSettings", 30, '#000', '0|0', "mm", 0, '#000'],
-                "Image settings\n1. Additional nickname\n2. Font size\n3. Font color in HEX format '#000'\n4. Text coordinates '100|100'\n5. Text anchor\n6. Stroke size\n7. Stroke color in HEX format '#000'",
-                validator=loader.validators.Series(
-                    fixed_len=7,
-                ),
+                "sysinfo_banner_url",
+                "https://raw.githubusercontent.com/AuthorChe-1/authorche-1.github.io/refs/heads/main/start.jpg",
+                "URL банера для інлайн-режиму sysinfo",
+                validator=loader.validators.Link(),
             ),
             loader.ConfigValue(
-                "custom_format",
-                "photo",
-                lambda: self.strings("_cfg_cst_frmt"),
-                validator=loader.validators.Choice(["photo", "video", "audio", "gif"]),
+                "website_url",
+                "https://authorche.top/sup",
+                "URL-адреса для кнопки 'Підтримати на сайті'",
+                validator=loader.validators.Link(),
             ),
             loader.ConfigValue(
-                "disable_banner",
-                False,
-                lambda: self.strings("_cfg_banner"),
-                validator=loader.validators.Boolean(),
+                "cryptobot_url",
+                "https://t.me/send?start=IVzEgNnRlefO",
+                "URL-адреса для кнопки 'CryptoBot'",
+                validator=loader.validators.Link(),
             ),
             loader.ConfigValue(
-                "disable_inline_banner",
-                False,
-                lambda: self.strings("_cfg_inline_banner"),
-                validator=loader.validators.Boolean(),
-            ),
-            loader.ConfigValue(
-                "timezone",
-                "+3",
-                lambda: self.strings("_cfg_time"),
-            ),
-            loader.ConfigValue(
-                "close_btn",
-                "🔻Close",
-                lambda: self.strings("_cfg_close"),
-            ),
-            loader.ConfigValue(
-                "custom_button1",
-                ["🌐WebSite", "https://authorche.top"],
-                lambda: self.strings("_cfg_cst_btn"),
-                validator=loader.validators.Series(min_len=0, max_len=2),
-            ),
-            loader.ConfigValue(
-                "custom_button2",
-                ["📱Telegram", "https://t.me/wsinfo"],
-                lambda: self.strings("_cfg_cst_btn"),
-                validator=loader.validators.Series(min_len=0, max_len=2),
-            ),
-            loader.ConfigValue(
-                "custom_button3",
-                ["❤️Donate", "https://t.me/acdonate_bot"],
-                lambda: self.strings("_cfg_cst_btn"),
-                validator=loader.validators.Series(min_len=0, max_len=2),
-            ),
-            loader.ConfigValue(
-                "custom_button4",
-                [],
-                lambda: self.strings("_cfg_cst_btn"),
-                validator=loader.validators.Series(min_len=0, max_len=2),
-            ),
-            loader.ConfigValue(
-                "custom_button5",
-                [],
-                lambda: self.strings("_cfg_cst_btn"),
-                validator=loader.validators.Series(min_len=0, max_len=2),
-            ),
-            loader.ConfigValue(
-                "custom_button6",
-                [],
-                lambda: self.strings("_cfg_cst_btn"),
-                validator=loader.validators.Series(min_len=0, max_len=2),
+                "xrocket_url",
+                "https://t.me/acdonate_bot?start=xrocket",
+                "URL-адреса для кнопки 'xRocket'",
+                validator=loader.validators.Link(),
             ),
         )
 
@@ -177,294 +174,146 @@ class InfoMod(loader.Module):
         self._db = db
         self._client = client
         self._me = await client.get_me()
+        self._name = utils.escape_html(get_display_name(self._me))
 
-    def _get_os_name(self):
-        try:
-            with open("/etc/os-release", "r") as f:
-                for line in f:
-                    if line.startswith("PRETTY_NAME"):
-                        return line.split("=")[1].strip().strip('"')
-        except FileNotFoundError:
-            return self.strings['non_detectable']
-        
-    def remove_emoji_and_html(self, text: str) -> str:
-        reg = r'<[^<]+?>'
-        text = f"{re.sub(reg, '', text)}"
-        allchars = [str for str in text]
-        emoji_list = [c for c in allchars if c in emoji.EMOJI_DATA]
-        clean_text = ''.join([str for str in text if not any(i in str for i in emoji_list)])
-        return clean_text
-    
-    def imgur(self, url: str) -> str:
-        page = requests.get(url, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"})
-        soup = BeautifulSoup(page.text, 'html.parser')
-        metatag = soup.find("meta", property="og:image")
-        return metatag['content']
+    def _render_sysinfo(self):
+        uname = lib_platform.uname()
+        boot = psutil.boot_time()
+        uptime = time.time() - boot
+        freq = psutil.cpu_freq()
+        load = psutil.cpu_percent(interval=0.5)
+        user = getpass.getuser()
+        vm, sm = psutil.virtual_memory(), psutil.swap_memory()
+        net = psutil.net_io_counters()
+        io = psutil.disk_io_counters()
+        distro_name, distro_ver = get_distro_info()
+        cpu_model = get_cpu_model()
 
-    def _render_info(self, start: float) -> str:
-        try:
-            repo = git.Repo(search_parent_directories=True)
-            diff = repo.git.log([f"HEAD..origin/{version.branch}", "--oneline"])
-            upd = (
-                self.strings("update_required").format(prefix=self.get_prefix()) if diff else self.strings("up-to-date")
-            )
-        except Exception:
-            upd = ""
+        net_info = []
+        for iface, addrs in psutil.net_if_addrs().items():
+            ip = mac = "—"
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    ip = addr.address
+                elif hasattr(socket, 'AF_PACKET') and addr.family == socket.AF_PACKET:
+                    mac = addr.address
+            net_info.append(f"<b>{iface}</b>: IP <code>{ip}</code>, MAC <code>{mac}</code>")
 
-        me = self.config['imgSettings'][0] if (self.config['imgSettings'][0] != "imgSettings") and self.config['switchInfo'] else '<b><a href="tg://user?id={}">{}</a></b>'.format(
-            self._client.heroku_me.id,
-            utils.escape_html(get_display_name(self._client.heroku_me)),
-        ).replace('{', '').replace('}', '')
-        
-        build = utils.get_commit_url()
-        _version = f'<i>{".".join(list(map(str, list(version.__version__))))}</i>'
-        prefix = f"«<code>{utils.escape_html(self.get_prefix())}</code>»"
-        platform = utils.get_named_platform()
-
-        # Time calculation
-        try:
-            offset = datetime.timedelta(hours=int(self.config["timezone"]))
-            tz = datetime.timezone(offset)
-            time_now = datetime.datetime.now(tz)
-            current_time = time_now.strftime("%H:%M:%S")
-        except:
-            current_time = "N/A"
-
-        # Platform emoji replacements
-        for emoji_char, icon in [
-            ("🍊", "<emoji document_id=5449599833973203438>🧡</emoji>"),
-            ("🍇", "<emoji document_id=5449468596952507859>💜</emoji>"),
-            ("😶‍🌫️", "<emoji document_id=5370547013815376328>😶‍🌫️</emoji>"),
-            ("❓", "<emoji document_id=5407025283456835913>📱</emoji>"),
-            ("🍀", "<emoji document_id=5395325195542078574>🍀</emoji>"),
-            ("🦾", "<emoji document_id=5386766919154016047>🦾</emoji>"),
-            ("🚂", "<emoji document_id=5359595190807962128>🚂</emoji>"),
-            ("🐳", "<emoji document_id=5431815452437257407>🐳</emoji>"),
-            ("🕶", "<emoji document_id=5407025283456835913>📱</emoji>"),
-            ("🐈‍⬛", "<emoji document_id=6334750507294262724>🐈‍⬛</emoji>"),
-            ("✌️", "<emoji document_id=5469986291380657759>✌️</emoji>"),
-            ("💎", "<emoji document_id=5471952986970267163>💎</emoji>"),
-            ("🛡", "<emoji document_id=5282731554135615450>🌩</emoji>"),
-            ("🌼", "<emoji document_id=5224219153077914783>❤️</emoji>"),
-            ("🎡", "<emoji document_id=5226711870492126219>🎡</emoji>"),
-            ("🐧", "<emoji document_id=5361541227604878624>🐧</emoji>"),
-            ("🧃", "<emoji document_id=5422884965593397853>🧃</emoji>"),
-            ("💻", "<emoji document_id=5469825590884310445>💻</emoji>"),
-            ("🍏", "<emoji document_id=5372908412604525258>🍏</emoji>")
-        ]:
-            platform = platform.replace(emoji_char, icon)
+        freq_str = f"{freq.current:.0f} MHz" if freq else "N/A"
 
         return (
-            (
-                "✍️ АвторБот\n"
-                if self.config["show_heroku"]
-                else ""
-            )
-            + self.config["custom_message"].format(
-                me=me,
-                version=_version,
-                build=build,
-                prefix=prefix,
-                platform=platform,
-                upd=upd,
-                uptime=utils.formatted_uptime(),
-                cpu_usage=utils.get_cpu_usage(),
-                ram_usage=f"{utils.get_ram_usage()} MB",
-                branch=version.branch,
-                hostname=lib_platform.node(),
-                user=getpass.getuser(),
-                os=self._get_os_name() or self.strings('non_detectable'),
-                kernel=lib_platform.release(),
-                cpu=f"{psutil.cpu_count(logical=False)} ({psutil.cpu_count()}) core(-s); {psutil.cpu_percent()}% total",
-                ping=round((time.perf_counter_ns() - start) / 10**6, 3),
-                time=current_time
-            )
-            if self.config["custom_message"]
-            else (
-                f'<b>✍️ АвторБот</b>\n\n'
-                f'<b><emoji document_id=5373141891321699086>😎</emoji> {self.strings("owner")}:</b> {me}\n\n'
-                f'<b><emoji document_id=5469741319330996757>💫</emoji> {self.strings("version")}:</b> {_version} {build}\n'
-                f'<b><emoji document_id=5449918202718985124>🌳</emoji> {self.strings("branch")}:</b> <code>{version.branch}</code>\n'
-                f'{upd}\n\n'
-                f'<b><emoji document_id=5472111548572900003>⌨️</emoji> {self.strings("prefix")}:</b> {prefix}\n'
-                f'<b><emoji document_id=5451646226975955576>⌛️</emoji> {self.strings("uptime")}:</b> {utils.formatted_uptime()}\n'
-                f'<b>⌚ Time:</b> {current_time}\n\n'
-                f'<b><emoji document_id=5431449001532594346>⚡️</emoji> {self.strings("cpu_usage")}:</b> <i>~{utils.get_cpu_usage()} %</i>\n'
-                f'<b><emoji document_id=5359785904535774578>💼</emoji> {self.strings("ram_usage")}:</b> <i>~{utils.get_ram_usage()} MB</i>\n'
-                f'<b>{platform}</b>'
-            )
+            f"<blockquote><emoji document_id=5776118099812028333>📟</emoji> <b>System Info</b>\n\n"
+            f"<emoji document_id=5215186239853964761>🖥️</emoji> <b><u>ОС и система:</u></b>\n"
+            f"<b>OS:</b> <code>{uname.system} {uname.release}</code>\n"
+            f"<b>Distro:</b> <code>{distro_name} {distro_ver}</code>\n"
+            f"<b>Kernel:</b> <code>{uname.version}</code>\n"
+            f"<b>Arch:</b> <code>{uname.machine}</code>\n"
+            f"<b>User:</b> <code>{user}</code>\n\n"
+            f"<emoji document_id=5341715473882955310>⚙️</emoji> <b><u>CPU:</u></b>\n"
+            f"<b>Model:</b> <code>{cpu_model}</code>\n"
+            f"<b>Cores:</b> <code>{psutil.cpu_count(logical=False)}/{psutil.cpu_count(logical=True)}</code>\n"
+            f"<b>Freq:</b> <code>{freq_str}</code>\n"
+            f"<b>Load:</b> <code>{load}%</code>\n\n"
+            f"<emoji document_id=5237799019329105246>🧠</emoji> <b><u>RAM:</u></b>\n"
+            f"<b>Used:</b> <code>{bytes2human(vm.used)}</code> / <code>{bytes2human(vm.total)}</code>\n"
+            f"<b>Swap:</b> <code>{bytes2human(sm.used)}</code> / <code>{bytes2human(sm.total)}</code>\n\n"
+            f"<emoji document_id=5462956611033117422>💾</emoji> <b><u>Диск:</u></b>\n"
+            f"<b>Read:</b> <code>{bytes2human(io.read_bytes)}</code>\n"
+            f"<b>Write:</b> <code>{bytes2human(io.write_bytes)}</code>\n\n"
+            f"<emoji document_id=5321141214735508486>📡</emoji> <b><u>Сеть:</u></b>\n"
+            f"<b>Recv:</b> <code>{bytes2human(net.bytes_recv)}</code>\n"
+            f"<b>Sent:</b> <code>{bytes2human(net.bytes_sent)}</code>\n"
+            f"{chr(10).join(net_info)}\n\n"
+            f"<emoji document_id=5382194935057372936>⏱</emoji> <b><u>Аптайм:</u></b>\n"
+            f"<b>Since:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(boot))}</code>\n"
+            f"<b>Uptime:</b> <code>{format_uptime(uptime)}</code>\n\n"
+            f"<emoji document_id=5854908544712707500>📦</emoji> <b><u>Версии:</u></b>\n"
+            f"<b>Python:</b> <code>{lib_platform.python_version()}</code>\n"
+            f"<b>Telethon:</b> <code>{telethon.__version__}</code></blockquote>"
         )
-    
-    def _get_info_photo(self, start: float) -> Optional[Path]:
-        imgform = self.config['banner_url'].split('.')[-1]
-        imgset = self.config['imgSettings']
-        if imgform in ['jpg', 'jpeg', 'png', 'bmp', 'webp']:
-            response = requests.get(self.config['banner_url'] if not self.config['banner_url'].startswith('https://imgur') else self.imgur(self.config['banner_url']), stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"})
-            img = Image.open(BytesIO(response.content))
-            font = ImageFont.truetype(
-                glob.glob(f'{os.getcwd()}/assets/font.*')[0], 
-                size=int(imgset[1]), 
-                encoding='unic'
-            )
-            w, h = img.size
-            draw = ImageDraw.Draw(img)
-            draw.text(
-                (int(w/2), int(h/2)) if imgset[3] == '0|0' else tuple([int(i) for i in imgset[3].split('|')]),
-                f'{utils.remove_html(self._render_info(start))}', 
-                anchor=imgset[4],
-                font=font,
-                fill=imgset[2] if imgset[2].startswith('#') else '#000',
-                stroke_width=int(imgset[5]),
-                stroke_fill=imgset[6] if imgset[6].startswith('#') else '#000',
-                embedded_color=True
-            )
-            path = f'{os.getcwd()}/assets/imginfo.{imgform}'
-            img.save(path)
-            return Path(path).absolute()
-        return None
 
-    def _get_mark(self, btn_count):
-        btn_count = str(btn_count)
-        return (
-            {
-                "text": self.config[f"custom_button{btn_count}"][0],
-                "url": self.config[f"custom_button{btn_count}"][1],
-            }
-            if self.config[f"custom_button{btn_count}"]
-            else None
+    # --- Userbot Commands ---
+
+    @loader.command()
+    async def sysinfo(self, message: Message):
+        """Надіслати детальну системну інформацію про сервер"""
+        await utils.answer(message, self._render_sysinfo())
+    
+    @loader.command()
+    async def info(self, message: Message):
+        """Надіслати інформацію для підтримки проєкту"""
+        await self.inline.form(
+            message=message,
+            text=str(self.config["donate_text"]),
+            photo=self.config["donate_banner_url"],
+            reply_markup=[
+                [{"text": self.strings["website_button"], "url": self.config["website_url"]}],
+                [
+                    {"text": self.strings["cryptobot_button"], "url": self.config["cryptobot_url"]},
+                    {"text": self.strings["xrocket_button"], "url": self.config["xrocket_url"]},
+                ],
+                [{"text": self.strings["close_button"], "callback": self.delete_form}],
+            ],
         )
+
+    async def delete_form(self, call):
+        await call.delete()
+
+    # --- Inline Handler ---
 
     @loader.inline_everyone
     async def info_inline_handler(self, query: InlineQuery) -> dict:
-        """Show userbot info inline"""
-        start = time.perf_counter_ns()
-        m = {x: self._get_mark(x) for x in range(1, 7)}
-        btns = [
-            [
-                *([m[1]] if m[1] else []),
-                *([m[2]] if m[2] else []),
-                *([m[3]] if m[3] else []),
+        """Обробляє інлайн-запити для sysinfo та info"""
+        info_result = {
+            "title": self.strings("send_donate_info"),
+            "description": self.strings("donate_description"),
+            "caption": self.config["donate_text"],
+            "photo": self.config["donate_banner_url"],
+            "thumb": self.config["donate_banner_url"],
+            "reply_markup": [
+                [{"text": self.strings["website_button"], "url": self.config["website_url"]}],
+                [
+                    {"text": self.strings["cryptobot_button"], "url": self.config["cryptobot_url"]},
+                    {"text": self.strings["xrocket_button"], "url": self.config["xrocket_url"]},
+                ],
             ],
-            [
-                *([m[4]] if m[4] else []),
-                *([m[5]] if m[5] else []),
-                *([m[6]] if m[6] else []),
-            ],
-        ]
-        msg_type = "message" if self.config["disable_inline_banner"] else "caption"
-        return {
-            "title": self.strings("send_info"),
-            "description": self.strings("description"),
-            msg_type: self._render_info(start),
-            self.config["custom_format"]: self.config["banner_url"],
-            "thumb": "https://raw.githubusercontent.com/AuthorChe-1/authorche-1.github.io/refs/heads/main/start.jpg",
-            "reply_markup": btns,
         }
-    
-    @loader.command()
-    async def insfont(self, message: Message):
-        "<Url|Reply to font> - Install font"
-        if message.is_reply:
-            reply = await message.get_reply_message()
-            fontform = reply.document.mime_type.split("/")[1]
-            if not fontform in ['ttf', 'otf']:
-                await utils.answer(
-                    message,
-                    self.strings["incorrect_format_font"]
-                )
-                return
-            origpath = glob.glob(f'{os.getcwd()}/assets/font.*')[0]
-            ptf = f'{os.getcwd()}/font.{fontform}'
-            os.rename(origpath, ptf)
-            photo = await reply.download_media(origpath)
-            if photo is None:
-                os.rename(ptf, origpath)
-                await utils.answer(
-                    message,
-                    self.strings["no_font"]
-                )
-                return
-            os.remove(ptf)
-        elif utils.check_url(utils.get_args_raw(message)):
-            fontform = utils.get_args_raw(message).split('.')[-1]
-            if not fontform in ['ttf', 'otf']:
-                await utils.answer(
-                    message,
-                    self.strings["incorrect_format_font"]
-                )
-                return
-            response = requests.get(utils.get_args_raw(message), stream=True)
-            os.remove(glob.glob(f'{os.getcwd()}/assets/font.*')[0])
-            with open(f'{os.getcwd()}/assets/font.{fontform}', 'wb') as file:
-                file.write(response.content)
-        else:
-            await utils.answer(
-                message,
-                self.strings["no_font"]
-            )
-            return
-        await utils.answer(
-            message,
-            self.strings["font_installed"]
-        )
 
-    @loader.command()
-    async def infocmd(self, message: Message):
-        """Send bot info with inline buttons"""
-        start = time.perf_counter_ns()
+        sysinfo_result = {
+            "title": self.strings("send_sysinfo"),
+            "description": self.strings("sysinfo_description"),
+            "message": self._render_sysinfo(),
+            "thumb": self.config["sysinfo_banner_url"],
+        }
         
-        if self.config['switchInfo']:
-            if self._get_info_photo(start) is None:
-                await utils.answer(
-                    message, 
-                    self.strings["incorrect_img_format"]
-                )
-                return
-           
-            await utils.answer_file(
-                message,
-                self._get_info_photo(start),
-                reply_to=getattr(message, "reply_to_msg_id", None),
-            )
-        else:
-            # Prepare inline buttons
-            m = {x: self._get_mark(x) for x in range(1, 7)}
-            btns = [
-                [
-                    *([m[1]] if m[1] else []),
-                    *([m[2]] if m[2] else []),
-                    *([m[3]] if m[3] else []),
-                ],
-                [
-                    *([m[4]] if m[4] else []),
-                    *([m[5]] if m[5] else []),
-                    *([m[6]] if m[6] else []),
-                ],
-            ]
-            
-            if '{ping}' in self.config.get("custom_message", ""):
-                message = await utils.answer(message, self.config["ping_emoji"])
-            
-            # Use inline form with buttons
-            await self.inline.form(
-                message=message,
-                text=self._render_info(start),
-                reply_markup=btns,
-                **{}
-                if self.config["disable_banner"]
-                else {self.config["custom_format"]: self.config["banner_url"]}
-            )
+        return [info_result, sysinfo_result]
 
-    @loader.command()
-    async def hinfo(self, message: Message):
-        """Show module description"""
-        await utils.answer(message, self.strings("desc"))
+    # --- Bot Commands Watcher ---
 
-    @loader.command()
-    async def setinfo(self, message: Message):
-        """Set custom info message"""
-        if not (args := utils.get_args_html(message)):
-            return await utils.answer(message, self.strings("setinfo_no_args"))
+    async def aiogram_watcher(self, message: AiogramMessage):
+        """Обробник команд для підв'язаного бота"""
+        if message.text and message.text.startswith("/start heroku init"):
+            await message.answer(self.strings["start_heroku_init"])
+            return
 
-        self.config["custom_message"] = args
-        await utils.answer(message, self.strings("setinfo_success"))
+        if message.text == "/donate":
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="CryptoBot 💳", url=self.config["cryptobot_url"])]
+            ])
+            await message.answer(self.strings["/donate"], reply_markup=keyboard)
+        elif message.text == "/menu" or message.text == "/start":
+            await message.answer(self.strings["/menu"])
+        elif message.text == "/bots":
+            await message.answer(self.strings["/bots"])
+        elif message.text == "/author":
+            await message.answer(self.strings["/author"])
+        elif message.text == "/xrocket":
+            xrocket_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="TON", url="https://t.me/xrocket?start=inv_4Wfq3fmqadtyNEP")],
+                [InlineKeyboardButton(text="USDT", url="https://t.me/xrocket?start=inv_i8nnYkalSWY7n8i")],
+                [InlineKeyboardButton(text="TRX", url="https://t.me/xrocket?start=inv_QOTWjNQHWLPkfrJ")],
+                [InlineKeyboardButton(text="BTC", url="https://t.me/xrocket?start=inv_QYFKjAKihGWpTW1")]
+            ])
+            await message.answer("🚀 <b>Оберіть спосіб оплати через xRocket:</b>", reply_markup=xrocket_keyboard)
+        elif message.text:
+            await message.answer(self.strings["/main"])
