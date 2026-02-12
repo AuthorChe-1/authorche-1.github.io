@@ -1,23 +1,31 @@
-
+# meta developer: @author_che
 # meta pic: https://authorche.top/1/security.jpg
 # scope: hikka_only
 # scope: hikka_min 3.0.0
 
 import logging
 import time
-from telethon.tl.functions.contacts import BlockRequest
+import contextlib
+from typing import Optional
+
+from telethon.tl.functions.contacts import BlockRequest, UnblockRequest
 from telethon.tl.functions.messages import DeleteHistoryRequest, ReportSpamRequest
 from telethon.tl.types import Message, PeerUser, User
-from telethon.utils import get_display_name
+from telethon.utils import get_display_name, get_peer_id
 
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
 
-__version__ = (3, 2, 0)
+__version__ = (3, 4, 0)
+
+def format_(state: Optional[bool]) -> str:
+    if state is None:
+        return "❔"
+    return "Enabled ✅" if state else "Disabled ❌"
 
 @loader.tds
-class AuthorSecurityMod(loader.Module):
+class AuthorSecurity(loader.Module):
     """
     Enterprise-grade Private Message Protection System.
     Filters unauthorized contacts with a professional AI-assistant persona.
@@ -52,6 +60,13 @@ class AuthorSecurityMod(loader.Module):
         "approved": "<b>✅ Access Granted</b>\nUser <a href=\"tg://user?id={}\">{}</a> has been whitelisted.",
         "args_pmban": "<b>⚠️ Syntax Error:</b> Usage: <code>.pmbanlast <count></code>",
         
+        # --- Force BL / Test Strings ---
+        "force_reset": (
+            "<b>🔄 Security Reset</b>\n"
+            "User <a href=\"tg://user?id={}\">{}</a> has been removed from whitelist and unblocked.\n"
+            "<i>Next message from them will trigger the Security System.</i>"
+        ),
+        
         # --- The Message sent to the Stranger (Public Face) ---
         "banned_msg": (
             "<b>🛡 AuthorSecurity System | Automated Response</b>\n\n"
@@ -71,7 +86,7 @@ class AuthorSecurityMod(loader.Module):
             "▫️ <b>.pmbl</b> — Toggle protection state.\n"
             "▫️ <b>.pmblsett</b> — Configure security parameters.\n"
             "▫️ <b>.testpm</b> — Preview the blockade message.\n"
-            "▫️ <b>.allowpm</b> — Whitelist a user manually."
+            "▫️ <b>.forcebl</b> — Reset user status (simulate new user)."
         ),
     }
 
@@ -130,7 +145,7 @@ class AuthorSecurityMod(loader.Module):
     async def client_ready(self):
         self._whitelist = self.get("whitelist", [])
         self._ratelimit = []
-        self._ratelimit_timeout = 5 * 60  # 5 minutes
+        self._ratelimit_timeout = 5 * 60
         self._ratelimit_threshold = 10
         
         if not self.get("ignore_hello", False):
@@ -142,32 +157,24 @@ class AuthorSecurityMod(loader.Module):
             )
             self.set("ignore_hello", True)
 
-    def _format_bool(self, state: bool) -> str:
-        return "Enabled ✅" if state else "Disabled ❌"
-
     async def pmblcmd(self, message: Message):
-        """Toggle the AuthorSecurity protection system."""
+        """Toggle PMBL"""
         current = self.get("state", False)
-        new_state = not current
-        self.set("state", new_state)
-        
+        new = not current
+        self.set("state", new)
         await utils.answer(
             message,
             self.strings("state").format(
-                "Active ✅" if new_state else "Inactive 💤",
-                self._format_bool(self.config["report_spam"]),
-                self._format_bool(self.config["delete_dialog"]),
+                "Active ✅" if new else "Inactive 💤",
+                format_(self.config["report_spam"]),
+                format_(self.config["delete_dialog"]),
             ),
         )
 
     async def testpmcmd(self, message: Message):
         """Send the current block message to this chat for testing."""
         caption = self.config["custom_message"] or self.strings("banned_msg")
-        
-        # We delete the command message to make it look clean
         await message.delete()
-        
-        # Sending via client (as User) to see exactly what others see
         await message.client.send_file(
             message.chat_id,
             file=self.config["photo"],
@@ -175,44 +182,8 @@ class AuthorSecurityMod(loader.Module):
             parse_mode="HTML"
         )
 
-    async def pmbanlastcmd(self, message: Message):
-        """<count> - Mass ban and clear history for N recent PMs."""
-        args = utils.get_args_raw(message)
-        if not args or not args.isdigit():
-            await utils.answer(message, self.strings("args_pmban"))
-            return
-
-        n = int(args)
-        await utils.answer(message, self.strings("removing").format(n))
-
-        dialogs = []
-        async for dialog in self._client.iter_dialogs(limit=n*2, ignore_pinned=True):
-            if not isinstance(dialog.message.peer_id, PeerUser):
-                continue
-            if dialog.message.peer_id.user_id == self._tg_id:
-                continue
-            dialogs.append(dialog)
-
-        to_ban = dialogs[:n]
-
-        for d in to_ban:
-            user_id = d.message.peer_id.user_id
-            try:
-                await self._client(BlockRequest(id=user_id))
-                await self._client(DeleteHistoryRequest(peer=user_id, just_clear=True, max_id=0))
-            except Exception as e:
-                logger.error(f"Failed to ban {user_id}: {e}")
-
-        await utils.answer(message, self.strings("removed").format(len(to_ban)))
-
-    def _approve(self, user_id: int, reason: str = "unknown"):
-        if user_id not in self._whitelist:
-            self._whitelist.append(user_id)
-            self.set("whitelist", self._whitelist)
-            logger.debug(f"User {user_id} whitelisted. Reason: {reason}")
-
-    async def allowpmcmd(self, message: Message):
-        """<reply/user> - Whitelist a user, allowing them to PM you."""
+    async def forceblcmd(self, message: Message):
+        """<reply/user> - Unblock and remove from whitelist (Simulate new user)."""
         args = utils.get_args_raw(message)
         reply = await message.get_reply_message()
         user = None
@@ -229,51 +200,138 @@ class AuthorSecurityMod(loader.Module):
             await utils.answer(message, self.strings("user_not_specified"))
             return
 
-        self._approve(user.id, "manual_command")
+        # 1. Remove from whitelist
+        if user.id in self._whitelist:
+            self._whitelist.remove(user.id)
+            self.set("whitelist", self._whitelist)
+        
+        # 2. Unblock
+        try:
+            await self._client(UnblockRequest(id=user.id))
+        except Exception:
+            pass
+
         await utils.answer(
             message, 
-            self.strings("approved").format(user.id, get_display_name(user))
+            self.strings("force_reset").format(user.id, get_display_name(user))
+        )
+
+    async def pmbanlastcmd(self, message: Message):
+        """<number> - Ban and delete dialogs with n most new users"""
+        n = utils.get_args_raw(message)
+        if not n or not n.isdigit():
+            await utils.answer(message, self.strings("args_pmban"))
+            return
+
+        n = int(n)
+        await utils.answer(message, self.strings("removing").format(n))
+
+        dialogs = []
+        async for dialog in self._client.iter_dialogs(ignore_pinned=True):
+            try:
+                if not isinstance(dialog.message.peer_id, PeerUser):
+                    continue
+            except AttributeError:
+                continue
+
+            # Original logic for reliable sorting
+            m = (
+                await self._client.get_messages(
+                    dialog.message.peer_id,
+                    limit=1,
+                    reverse=True,
+                )
+            )[0]
+
+            dialogs += [
+                (
+                    get_peer_id(dialog.message.peer_id),
+                    int(time.mktime(m.date.timetuple())),
+                )
+            ]
+
+        dialogs.sort(key=lambda x: x[1])
+        to_ban = [d for d, _ in dialogs[::-1][:n]]
+
+        for d in to_ban:
+            try:
+                await self._client(BlockRequest(id=d))
+                await self._client(DeleteHistoryRequest(peer=d, just_clear=True, max_id=0))
+            except Exception as e:
+                logger.error(f"Error acting on {d}: {e}")
+
+        await utils.answer(message, self.strings("removed").format(n))
+
+    def _approve(self, user: int, reason: str = "unknown"):
+        self._whitelist += [user]
+        self._whitelist = list(set(self._whitelist))
+        self.set("whitelist", self._whitelist)
+        logger.debug(f"User approved in pm {user}, filter: {reason}")
+        return
+
+    async def allowpmcmd(self, message: Message):
+        """<reply or user> - Allow user to pm you"""
+        args = utils.get_args_raw(message)
+        reply = await message.get_reply_message()
+        user = None
+
+        try:
+            user = await self._client.get_entity(args)
+        except Exception:
+            with contextlib.suppress(Exception):
+                user = await self._client.get_entity(reply.sender_id) if reply else None
+
+        if not user:
+            chat = await message.get_chat()
+            if not isinstance(chat, User):
+                await utils.answer(message, self.strings("user_not_specified"))
+                return
+            user = chat
+
+        self._approve(user.id, "manual_approve")
+        try:
+            await self._client(UnblockRequest(id=user.id))
+        except:
+            pass
+
+        await utils.answer(
+            message, self.strings("approved").format(user.id, get_display_name(user))
         )
 
     async def watcher(self, message: Message):
-        """Monitors incoming messages."""
+        # ORIGINAL WATCHER LOGIC (Proven to work)
         if (
-            not isinstance(message, Message)
-            or getattr(message, "out", False)
+            getattr(message, "out", False)
+            or not isinstance(message, Message)
             or not isinstance(message.peer_id, PeerUser)
             or not self.get("state", False)
+            or utils.get_chat_id(message)
+            in {
+                1271266957,  # @replies
+                777000,  # Telegram Notifications
+                self._tg_id,  # Self
+            }
         ):
             return
 
-        if message.sender_id in {
-            777000,  # Telegram
-            1271266957,  # Replies
-            self._tg_id
-        }:
-            return
-
-        self._queue.append(message)
+        self._queue += [message]
 
     @loader.loop(interval=0.05, autostart=True)
     async def ban_loop(self):
-        """Processes the ban queue."""
         if not self._ban_queue:
             return
 
         message = self._ban_queue.pop(0)
-        
-        current_time = time.time()
-        self._ratelimit = [t for t in self._ratelimit if t + self._ratelimit_timeout > current_time]
+        self._ratelimit = list(
+            filter(
+                lambda x: x + self._ratelimit_timeout < time.time(),
+                self._ratelimit,
+            )
+        )
 
-        sender_user = None
-        try:
-            sender_user = await self._client.get_entity(message.peer_id)
-        except Exception:
-            pass
-            
-        sender_name = get_display_name(sender_user) if sender_user else str(message.sender_id)
+        dialog = None
 
-        # 1. Send Warning to User (if not silent and under rate limit)
+        # 1. Send Warning (using new strings)
         if len(self._ratelimit) < self._ratelimit_threshold:
             if not self.config["silent"]:
                 try:
@@ -284,30 +342,36 @@ class AuthorSecurityMod(loader.Module):
                         parse_mode="HTML"
                     )
                 except Exception:
-                    # Fallback if image fails or privacy settings prevent it
-                    try:
-                        await self._client.send_message(
-                            message.peer_id,
-                            self.config["custom_message"] or self.strings("banned_msg"),
-                            parse_mode="HTML"
-                        )
-                    except Exception:
-                        pass # Can't write to user, ignore
-                        
-                self._ratelimit.append(current_time)
+                    await utils.answer(
+                        message,
+                        self.config["custom_message"] or self.strings("banned_msg"),
+                    )
 
-        # 2. Log to Saved Messages (Bot)
+                self._ratelimit += [round(time.time())]
+
+            try:
+                dialog = await self._client.get_entity(message.peer_id)
+            except ValueError:
+                pass
+
+        # 2. Log to Saved Messages
         msg_content = "Media/Sticker"
         if message.raw_text:
             msg_content = message.raw_text[:300]
+        elif message.sticker:
+            msg_content = "<sticker>"
+        elif message.photo:
+            msg_content = "<photo>"
+
+        sender_name = get_display_name(dialog) if dialog else str(message.sender_id)
 
         await self.inline.bot.send_message(
-            self._tg_id,
+            self._client.tg_id,
             self.strings("banned_log").format(
-                message.sender_id,
+                dialog.id if dialog is not None else message.sender_id,
                 utils.escape_html(sender_name),
-                self._format_bool(self.config["report_spam"]),
-                self._format_bool(self.config["delete_dialog"]),
+                format_(self.config["report_spam"]),
+                format_(self.config["delete_dialog"]),
                 utils.escape_html(msg_content),
             ),
             parse_mode="HTML",
@@ -317,59 +381,81 @@ class AuthorSecurityMod(loader.Module):
         # 3. Block and Cleanup
         try:
             await self._client(BlockRequest(id=message.sender_id))
-            
-            if self.config["report_spam"]:
-                await self._client(ReportSpamRequest(peer=message.sender_id))
-            
-            if self.config["delete_dialog"]:
-                await self._client(DeleteHistoryRequest(peer=message.sender_id, just_clear=True, max_id=0))
-                
         except Exception as e:
-            logger.error(f"Error acting on {message.sender_id}: {e}")
+            logger.error(f"Failed to block {message.sender_id}: {e}")
 
-        self._approve(message.sender_id, "banned_auto")
+        if self.config["report_spam"]:
+            try:
+                await self._client(ReportSpamRequest(peer=message.sender_id))
+            except: pass
+
+        if self.config["delete_dialog"]:
+            try:
+                await self._client(
+                    DeleteHistoryRequest(peer=message.sender_id, just_clear=True, max_id=0)
+                )
+            except: pass
+
+        self._approve(message.sender_id, "banned")
 
     @loader.loop(interval=0.01, autostart=True)
     async def queue_processor(self):
-        """Analyzes messages to decide if they should be banned."""
+        # ORIGINAL PROCESSOR LOGIC (Proven to work)
         if not self._queue:
             return
 
         message = self._queue.pop(0)
-        sender_id = message.sender_id
 
-        if sender_id in self._whitelist:
+        cid = utils.get_chat_id(message)
+        if cid in self._whitelist:
             return
 
-        try:
-            entity = await self._client.get_entity(sender_id)
-            
-            if getattr(entity, 'bot', False):
-                self._approve(sender_id, "is_bot")
-                return
+        peer = (
+            getattr(getattr(message, "sender", None), "username", None)
+            or message.peer_id
+        )
 
-            if self.config["ignore_contacts"] and getattr(entity, 'contact', False):
-                self._approve(sender_id, "is_contact")
-                return
+        with contextlib.suppress(ValueError):
+            entity = await self._client.get_entity(peer)
+
+            if entity.bot:
+                return self._approve(cid, "bot")
+
+            if self.config["ignore_contacts"]:
+                if entity.contact:
+                    return self._approve(cid, "ignore_contacts")
+
+        # Original history check logic (reliable)
+        try:
+            first_message = (
+                await self._client.get_messages(
+                    peer,
+                    limit=1,
+                    reverse=True,
+                )
+            )[0]
+
+            if (
+                getattr(message, "raw_text", False)
+                and first_message.sender_id == self._tg_id
+            ):
+                return self._approve(cid, "started_by_you")
         except Exception:
             pass
 
-        try:
-            history = await self._client.get_messages(sender_id, limit=200)
-            
-            # If the user has EVER replied to YOU, or you started it
-            if history:
-                if history[-1].sender_id == self._tg_id:
-                    self._approve(sender_id, "initiated_by_owner")
-                    return
+        if self.config["ignore_active"]:
+            q = 0
+            async for msg in self._client.iter_messages(peer, limit=200):
+                if msg.sender_id == self._tg_id:
+                    q += 1
 
-            if self.config["ignore_active"]:
-                my_msg_count = sum(1 for msg in history if msg.sender_id == self._tg_id)
-                if my_msg_count >= self.config["active_threshold"]:
-                    self._approve(sender_id, "active_conversation")
-                    return
-        except Exception:
-            pass
+                if q >= self.config["active_threshold"]:
+                    return self._approve(cid, "active_threshold")
 
-        # If logic reaches here -> BAN
-        self._ban_queue.append(message)
+        self._ban_queue += [message]
+
+    @loader.debug_method(name="unwhitelist")
+    async def denypm(self, message: Message):
+        user = (await message.get_reply_message()).sender_id
+        self.set("whitelist", list(set(self.get("whitelist", [])) - {user}))
+        return f"User unwhitelisted: {user}"
